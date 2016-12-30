@@ -96,7 +96,7 @@ def classification_pipeline():
 
     l = 'alsasrc device={} blocksize={} ! audioconvert ! audioresample ! audio/x-raw, rate=16000, channels=1, format=S16LE ! tee name=t\
      t. ! queue ! wavenc ! filesink location=runtimetest.wav\
-     t. ! appsink name=sink emit-signals=true'.format(AUDIO_DEVICE, 16000)
+     t. ! appsink name=sink emit-signals=true'.format(AUDIO_DEVICE, 32000)
     '''
     l = ' ! '.join([
         'alsasrc device={} blocksize={}'.format(AUDIO_DEVICE, 32000),
