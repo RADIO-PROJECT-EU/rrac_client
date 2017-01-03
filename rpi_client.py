@@ -23,6 +23,12 @@ from pyAudioAnalysis import audioFeatureExtraction as aF
 
 from utils import *
 
+
+rateSignal = 16000
+rateDevice = 44100
+stWindow = 0.1
+stStep = 0.1
+
 ROOT_TOPIC = '/rrac'
 ROOT_FOLDER = os.environ.get('RRAC_HOME', os.path.dirname(os.path.realpath(__file__)))
 AUDIO_DEVICE = None
@@ -84,7 +90,7 @@ def recording_pipeline():
         'alsasrc device={}'.format(AUDIO_DEVICE),
         'audioconvert',
         'audioresample',
-        'audio/x-raw, rate=16000, channels=1',
+        'audio/x-raw, rate={}, channels=1'.format(rateSignal),
         'wavenc',
         'filesink name=sink'
     ])
@@ -92,11 +98,10 @@ def recording_pipeline():
     return Gst.parse_launch(l)
 
 def classification_pipeline():
-
-
-    l = 'alsasrc device={} blocksize={} ! audioconvert ! audioresample ! audio/x-raw, rate=16000, channels=1, format=S16LE ! tee name=t\
+    global rateSignal, rateDevice
+    l = 'alsasrc device={} blocksize={} ! audioconvert ! audioresample ! audio/x-raw, rate={}, channels=1, format=S16LE ! tee name=t\
      t. ! queue ! wavenc ! filesink location=runtimetest.wav\
-     t. ! appsink name=sink emit-signals=true'.format(AUDIO_DEVICE, 32000)
+     t. ! appsink name=sink emit-signals=true'.format(AUDIO_DEVICE, rateDevice * 2, rateSignal)
     '''
     l = ' ! '.join([
         'alsasrc device={} blocksize={}'.format(AUDIO_DEVICE, 32000),
@@ -154,21 +159,28 @@ def stop_recording():
         return (False, 'Could not stop recording')
 
 def classification_callback(sink):
-    global MQTT_CLIENT, EVENT_CLASSIFIER
-
+    global MQTT_CLIENT, EVENT_CLASSIFIER, rateSignal, stWindow, stStep
     gst_sample = sink.emit('pull-sample')
     gst_buffer = gst_sample.get_buffer()
     raw_data = gst_buffer.extract_dup(0, gst_buffer.get_size())
-    data = np.frombuffer(raw_data, dtype=np.int16)
-    features = aF.mtFeatureExtraction(data, 16000, 16000, 16000, aT.shortTermWindow * 16000, aT.shortTermStep * 16000)[0] # 1s mt / 20ms st windows
+    data = np.frombuffer(raw_data, dtype=np.int16)    
+    T1 = time.time()
+    features = aF.mtFeatureExtraction(data, rateSignal, rateSignal, rateSignal, stWindow * rateSignal, stStep * rateSignal)[0] 
     features = features.mean(axis=1)
     normalized_features = (features - EVENT_CLASSIFIER['MEAN']) / EVENT_CLASSIFIER['STD']
     [r, p] = aT.classifierWrapper(EVENT_CLASSIFIER['OBJ'], 'svm', normalized_features)
-
+    T2 = time.time()
+    signalDur = data.shape[0] / float(rateSignal)
+    eTime = T2 - T1
+    processRatio = eTime / signalDur
+    print "{0:.3f} sec recorded. Process ratio: {1:.2f}".format(signalDur, processRatio)
+    #r = 0
+    #p = [0.5]
     idx = int(r)
     event_notification = {
         't':      int(time.time()),
         'energy': features[1],
+        #'energy': 1.0,
         'event':  EVENT_CLASSIFIER['CLASSES'][idx],
         'prob':   max(p)
     }
@@ -177,6 +189,7 @@ def classification_callback(sink):
     return Gst.FlowReturn.OK
 
 def train_classifier(events):
+    global stWindow, stStep
     logging.info('training classifier with events {}'.format(events))
     try:
         assert(len(events) > 1)
@@ -212,7 +225,7 @@ def train_classifier(events):
     ncls = len(populate_classifiers()) + 1
     classifier_name = 'racc_{:03d}'.format(ncls)
     logging.info('Creating classifier {}'.format(classifier_name))
-    aT.featureAndTrain(folders, 1, 1, aT.shortTermWindow, aT.shortTermStep, 'svm', os.path.join(ROOT_FOLDER, 'classifiers', classifier_name), False)
+    aT.featureAndTrain(folders, 1, 1, stWindow, stStep, 'svm', os.path.join(ROOT_FOLDER, 'classifiers', classifier_name), False)
     print('done training')
     return (True, 'test')
 
